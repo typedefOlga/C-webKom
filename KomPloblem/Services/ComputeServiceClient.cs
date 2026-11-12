@@ -14,7 +14,7 @@ public class ComputeServiceClient : IDisposable
         _httpClient = new HttpClient
         {
             BaseAddress = new Uri(serviceUrl),
-            Timeout = TimeSpan.FromSeconds(30)
+            Timeout = TimeSpan.FromSeconds(5)
         };
 
         _ownsHttpClient = true;

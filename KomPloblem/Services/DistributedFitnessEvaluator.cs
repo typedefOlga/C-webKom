@@ -2,13 +2,19 @@
 using CoreLibrary;
 using System.Collections.Concurrent;
 using System.Net.Http;
+using System.Text.Json;
 
 namespace KomPloblemApp.Services;
 
+/// <summary>
 /// Распределяет вычисление Fitness между несколькими сервисами.
+/// </summary>
 public class DistributedFitnessEvaluator : IFitnessEvaluator, IDisposable
 {
     private readonly List<ComputeServiceClient> _clients = [];
+
+    // Храним недоступные сервисы на протяжении всего запуска ГА.
+    private readonly ConcurrentDictionary<int, Exception> _unavailableServices = new();
 
     public DistributedFitnessEvaluator(IEnumerable<string> serviceUrls)
     {
@@ -50,14 +56,28 @@ public class DistributedFitnessEvaluator : IFitnessEvaluator, IDisposable
         if (routes.Length == 0)
             return [];
 
-        int activeServices = Math.Min(_clients.Count, routes.Length);
+        // Учитываем только те сервисы, которые ещё не отказали.
+        int availableServices = _clients.Count - _unavailableServices.Count;
+
+        if (availableServices == 0)
+        {
+            throw new InvalidOperationException(
+                "Все вычислительные сервисы недоступны.");
+        }
+
+        int activeServices = Math.Min(availableServices, routes.Length);
 
         int routesPerService = routes.Length / activeServices;
         int remainder = routes.Length % activeServices;
 
-        var unavailableServices = new ConcurrentDictionary<int, Exception>();
         var fitness = new double[routes.Length];
         var tasks = new List<Task>();
+
+        // Собираем индексы сервисов, которые ещё доступны.
+        int[] availableServiceIndexes = Enumerable
+            .Range(0, _clients.Count)
+            .Where(i => !_unavailableServices.ContainsKey(i))
+            .ToArray();
 
         int startIndex = 0;
 
@@ -73,7 +93,7 @@ public class DistributedFitnessEvaluator : IFitnessEvaluator, IDisposable
             Array.Copy(routes, startIndex, part, 0, count);
 
             int currentStartIndex = startIndex;
-            int initialServiceIndex = i;
+            int initialServiceIndex = availableServiceIndexes[i];
 
             tasks.Add(
                 EvaluatePartWithFailoverAsync(
@@ -82,7 +102,6 @@ public class DistributedFitnessEvaluator : IFitnessEvaluator, IDisposable
                     currentStartIndex,
                     initialServiceIndex,
                     fitness,
-                    unavailableServices,
                     cancellationToken));
 
             startIndex += count;
@@ -99,7 +118,6 @@ public class DistributedFitnessEvaluator : IFitnessEvaluator, IDisposable
         int startIndex,
         int initialServiceIndex,
         double[] fitness,
-        ConcurrentDictionary<int, Exception> unavailableServices,
         CancellationToken cancellationToken)
     {
         var errors = new List<Exception>();
@@ -111,7 +129,8 @@ public class DistributedFitnessEvaluator : IFitnessEvaluator, IDisposable
             int serviceIndex =
                 (initialServiceIndex + attempt) % _clients.Count;
 
-            if (unavailableServices.ContainsKey(serviceIndex))
+            // Не обращаемся к сервису, который уже отказал.
+            if (_unavailableServices.ContainsKey(serviceIndex))
                 continue;
 
             try
@@ -140,9 +159,13 @@ public class DistributedFitnessEvaluator : IFitnessEvaluator, IDisposable
             catch (Exception ex) when (
                 ex is HttpRequestException ||
                 ex is TaskCanceledException ||
-                ex is System.Text.Json.JsonException)
+                ex is JsonException ||
+                ex is InvalidOperationException)
             {
-                unavailableServices.TryAdd(serviceIndex, ex);
+                // Запоминаем отказ. В следующих поколениях
+                // этот сервис больше не будет получать запросы.
+                _unavailableServices.TryAdd(serviceIndex, ex);
+
                 errors.Add(ex);
             }
         }

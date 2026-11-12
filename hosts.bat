@@ -1,5 +1,7 @@
 @echo off
 
-start "ComputeService HTTPS" cmd /k "cd /d C:\Users\user\olga\cs\KomPloblem2\WebApplication1 && dotnet run --launch-profile https"
+set "PROJECT_DIR=%~dp0WebApplication1"
 
-start "ComputeService HTTP" cmd /k "cd /d C:\Users\user\olga\cs\KomPloblem2\WebApplication1 && dotnet run --launch-profile http"
+start "ComputeService HTTPS" cmd /k "cd /d "%PROJECT_DIR%" && dotnet run --launch-profile https"
+
+start "ComputeService HTTP" cmd /k "cd /d "%PROJECT_DIR%" && dotnet run --launch-profile http"
